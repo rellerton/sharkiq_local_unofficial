@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any
 
 import voluptuous as vol
@@ -13,8 +14,11 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_HOST, CONF_NAME
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
+
+from sharklocal.compat import ROBOT_TYPES
 
 from sharklocal import (
     ConnectError,
@@ -24,7 +28,13 @@ from sharklocal import (
 
 from .const import (
     CONF_MAPPING,
+    CONF_CLEAN_EDGE,
+    CONF_ROBOT_TYPE,
     CONF_SCAN_INTERVAL,
+    CONF_SELF_EMPTY_DOCK,
+    DEFAULT_CLEAN_EDGE,
+    DEFAULT_ROBOT_TYPE,
+    DEFAULT_SELF_EMPTY_DOCK,
     CONF_USE_MQTT,
     DEFAULT_MAPPING,
     DEFAULT_SCAN_INTERVAL,
@@ -47,12 +57,18 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
-async def _probe(host: str, mapping: str, use_mqtt: bool) -> str | None:
+async def _probe(
+    hass: HomeAssistant, host: str, mapping: str, use_mqtt: bool
+) -> str | None:
     """Try to talk to the vacuum. Returns the MAC address as a unique ID, or None."""
-    client = VacuumClient(
-        host=host,
-        rest_mappings=mapping,
-        mqtt_mappings=mapping if use_mqtt else None,
+    # Construction does blocking I/O (mapping YAML, SSL context).
+    client = await hass.async_add_executor_job(
+        partial(
+            VacuumClient,
+            host=host,
+            rest_mappings=mapping,
+            mqtt_mappings=mapping if use_mqtt else None,
+        )
     )
     try:
         async with client:
@@ -101,7 +117,7 @@ class SharkIQLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             # Make host the fallback unique ID; replaced by MAC if we can read it.
             unique_id = host
             try:
-                mac = await _probe(host, mapping, use_mqtt)
+                mac = await _probe(self.hass, host, mapping, use_mqtt)
                 if mac:
                     unique_id = mac
             except ConnectError:
@@ -147,16 +163,33 @@ class SharkIQLocalOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        current = self.config_entry.options.get(
-            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-        )
-
+        options = self.config_entry.options
         schema = vol.Schema(
             {
-                vol.Required(CONF_SCAN_INTERVAL, default=current): vol.All(
+                # Which robot this is decides which settings are offered.
+                vol.Required(
+                    CONF_ROBOT_TYPE, default=options.get(CONF_ROBOT_TYPE, DEFAULT_ROBOT_TYPE)
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=list(ROBOT_TYPES),
+                        translation_key=CONF_ROBOT_TYPE,
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Required(
+                    CONF_SELF_EMPTY_DOCK,
+                    default=options.get(CONF_SELF_EMPTY_DOCK, DEFAULT_SELF_EMPTY_DOCK),
+                ): bool,
+                vol.Required(
+                    CONF_CLEAN_EDGE, default=options.get(CONF_CLEAN_EDGE, DEFAULT_CLEAN_EDGE)
+                ): bool,
+                vol.Required(
+                    CONF_SCAN_INTERVAL,
+                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                ): vol.All(
                     cv.positive_int,
                     vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
-                )
+                ),
             }
         )
 

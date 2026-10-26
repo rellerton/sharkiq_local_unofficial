@@ -24,19 +24,179 @@
     "step": {
       "init": {
         "title": "Shark IQ Vacuum options",
-        "description": "How often to poll the vacuum for status updates. Faster polling means fresher battery level and quicker response in the UI; slower polling means less network traffic. 30s is the recommended default. Range: 5\u2013600 seconds.",
+        "description": "Tell the integration what kind of Shark this is, so it offers only the settings your robot has. Not sure? Laser-navigating robots have a round turret on top; the model number is on the sticker under the robot.",
         "data": {
+          "robot_type": "Robot type",
+          "self_empty_dock": "Has a self-emptying dock",
+          "clean_edge": "Has CleanEdge air jets",
           "scan_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "robot_type": "Decides which settings and cleaning modes are offered.",
+          "self_empty_dock": "Adds Evac & Resume.",
+          "clean_edge": "Adds the CleanEdge switch.",
+          "scan_interval": "Fallback polling; status is pushed live over MQTT. 5–600 seconds."
         }
       }
     }
   },
   "entity": {
+    "button": {
+      "explore": {
+        "name": "Explore run"
+      }
+    },
+    "image": {
+      "map": {
+        "name": "Map"
+      }
+    },
+    "number": {
+      "volume": {
+        "name": "Volume"
+      }
+    },
+    "select": {
+      "suction": {
+        "name": "Suction",
+        "state": {
+          "eco": "Eco",
+          "normal": "Normal",
+          "max": "Max"
+        }
+      },
+      "carpet_detect": {
+        "name": "Carpet detection",
+        "state": {
+          "auto": "Automatic",
+          "off": "Off"
+        }
+      }
+    },
     "sensor": {
-      "battery": { "name": "Battery" },
-      "rssi": { "name": "Signal strength" },
-      "ssid": { "name": "Wi-Fi SSID" },
-      "ip_address": { "name": "IP address" }
+      "battery": {
+        "name": "Battery"
+      },
+      "last_clean_area": {
+        "name": "Last clean area"
+      },
+      "last_clean_duration": {
+        "name": "Last clean duration"
+      },
+      "last_clean_start": {
+        "name": "Last clean start"
+      },
+      "last_warning": {
+        "name": "Last warning"
+      },
+      "last_end_reason": {
+        "name": "Last job end reason"
+      },
+      "last_dock_reason": {
+        "name": "Last dock reason"
+      },
+      "rssi": {
+        "name": "Signal strength"
+      },
+      "ssid": {
+        "name": "Wi-Fi SSID"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "error": {
+        "name": "Error"
+      },
+      "warning": {
+        "name": "Warning"
+      },
+      "robot_state": {
+        "name": "Robot state"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "relocation": {
+        "name": "Position fix"
+      },
+      "suction_motor_speed": {
+        "name": "Suction motor speed"
+      },
+      "brushroll_speed": {
+        "name": "Brushroll speed"
+      },
+      "side_brush_speed": {
+        "name": "Side brush speed"
+      },
+      "last_clean_mode": {
+        "name": "Last clean mode"
+      }
+    },
+    "switch": {
+      "recharge_resume": {
+        "name": "Recharge & Resume"
+      },
+      "evac_resume": {
+        "name": "Evac & Resume"
+      },
+      "clean_edge": {
+        "name": "CleanEdge"
+      },
+      "do_not_disturb": {
+        "name": "Do not disturb"
+      },
+      "carpet_boost": {
+        "name": "Carpet boost"
+      },
+      "button_sounds": {
+        "name": "Button sounds"
+      },
+      "underglow_lights": {
+        "name": "Underglow lights"
+      }
+    }
+  },
+  "services": {
+    "clean_rooms": {
+      "name": "Clean rooms",
+      "description": "Cleans the named rooms from the robot's map. Unlike Clean area, this can request a Matrix Clean.",
+      "fields": {
+        "rooms": {
+          "name": "Rooms",
+          "description": "Room names as shown in the SharkClean app (case and punctuation are ignored). The vacuum's rooms attribute lists them."
+        },
+        "matrix": {
+          "name": "Matrix Clean",
+          "description": "Clean the rooms twice, in a crosshatch."
+        }
+      }
+    },
+    "clean_spot": {
+      "name": "Clean spot",
+      "description": "Spot-cleans a square of about 1.5 m around a point on the robot's map.",
+      "fields": {
+        "x": {
+          "name": "X",
+          "description": "Map x coordinate, in metres."
+        },
+        "y": {
+          "name": "Y",
+          "description": "Map y coordinate, in metres."
+        }
+      }
+    }
+  },
+  "selector": {
+    "robot_type": {
+      "options": {
+        "lidar": "Laser-navigating robot (e.g. Matrix, AI) — most models",
+        "lidar_carpet": "Laser robot with carpet detection",
+        "rv3000": "RV3000 series (underglow and stain lights)",
+        "spot_lidar": "Compact laser robot without spot cleaning (RV2100)",
+        "map": "Camera-navigating robot with a saved map",
+        "air": "Camera-navigating robot without a saved map",
+        "basic": "Basic robot without a map"
+      }
     }
   }
 }

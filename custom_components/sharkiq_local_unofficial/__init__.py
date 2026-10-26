@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.typing import ConfigType
 
 from sharklocal import SharklocalError, VacuumClient
 
@@ -21,9 +25,18 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
-from .coordinator import SharkCoordinator
+from .coordinator import STORAGE_VERSION, SharkCoordinator, capabilities_from_options
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration's services."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -34,10 +47,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # scan_interval lives in options (editable post-setup), not data.
     scan_interval: int = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
 
-    client = VacuumClient(
-        host=host,
-        rest_mappings=mapping,
-        mqtt_mappings=mapping if use_mqtt else None,
+    # Construction reads the mapping YAML and builds an SSL context — blocking
+    # I/O that must stay out of the event loop.
+    client = await hass.async_add_executor_job(
+        partial(
+            VacuumClient,
+            host=host,
+            rest_mappings=mapping,
+            mqtt_mappings=mapping if use_mqtt else None,
+        )
     )
 
     # VacuumClient supports async-context-manager use; we manage it manually
@@ -47,11 +65,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except SharklocalError as err:
         raise ConfigEntryNotReady(f"Could not connect to {host}: {err}") from err
 
-    coordinator = SharkCoordinator(hass, client, entry.entry_id, host, scan_interval)
+    coordinator = SharkCoordinator(
+        hass, client, entry.entry_id, host, scan_interval, use_mqtt
+    )
+    coordinator.capabilities = capabilities_from_options(entry.options)
 
     try:
         await coordinator.async_setup()
         await coordinator.async_config_entry_first_refresh()
+        await coordinator.async_start_monitoring()
     except Exception:
         # If first refresh failed, close the client we just opened.
         await client.close()
@@ -68,8 +90,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options updates by applying the new scan interval in place."""
+    """Apply options: a new scan interval in place, new capabilities by reloading."""
     coordinator: SharkCoordinator = hass.data[DOMAIN][entry.entry_id]
+    if coordinator.capabilities != capabilities_from_options(entry.options):
+        # Which entities exist depends on what the robot has.
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+        return
     new_interval: int = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     coordinator.update_interval = timedelta(seconds=new_interval)
     _LOGGER.debug(
@@ -84,3 +110,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: SharkCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.client.close()
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the stored map when the vacuum is removed."""
+    await Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.map").async_remove()

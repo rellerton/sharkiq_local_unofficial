@@ -1,0 +1,2 @@
+git+https://github.com/MatthewFlamm/pytest-homeassistant-custom-component@0.13.375#pytest-homeassistant-custom-component==0.13.375
+git+https://github.com/rellerton/sharklocal@76d335bdc8ead49ab8b1c3f833c0aebbb3abedbc#sharklocal==0.3.0.dev14

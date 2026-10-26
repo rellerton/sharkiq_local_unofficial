@@ -2,22 +2,27 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.vacuum import (
+    Segment,
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from sharklocal import SharklocalError
-from sharklocal.models import VacuumMode
+from sharklocal.models import SuctionLevel, VacuumMode
+from sharklocal.vacuum_map import spot_polygon
 
 from .const import CONF_NAME, DOMAIN
-from .coordinator import SharkCoordinator
+from .coordinator import JobTarget, SharkCoordinator
 from .entity import SharkBaseEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,7 +36,11 @@ MODE_TO_ACTIVITY: dict[VacuumMode, VacuumActivity] = {
     VacuumMode.DOCKED: VacuumActivity.DOCKED,
     VacuumMode.IDLE: VacuumActivity.IDLE,
     VacuumMode.EXPLORING: VacuumActivity.CLEANING,
+    VacuumMode.PAUSED: VacuumActivity.PAUSED,
+    VacuumMode.ERROR: VacuumActivity.ERROR,
 }
+
+FAN_SPEEDS = [level.value for level in SuctionLevel]
 
 
 async def async_setup_entry(
@@ -44,22 +53,56 @@ async def async_setup_entry(
     async_add_entities([SharkVacuum(coordinator, entry.data[CONF_NAME])])
 
 
-class SharkVacuum(SharkBaseEntity, StateVacuumEntity):
+def _segments(room_names: list[str]) -> list[Segment]:
+    # The robot identifies rooms only by name, so the name is the segment id.
+    return [Segment(id=name, name=name.strip()) for name in room_names]
+
+
+class SharkVacuum(SharkBaseEntity, StateVacuumEntity, RestoreEntity):
     """Representation of a Shark IQ vacuum."""
 
     _attr_name = None  # uses device name
-    _attr_supported_features = (
+    _attr_fan_speed_list = FAN_SPEEDS
+
+    # "stop" is the robot's return-to-dock command, so stopping sends it home.
+    _BASE_FEATURES = (
         VacuumEntityFeature.STATE
         | VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
-        | VacuumEntityFeature.PAUSE
         | VacuumEntityFeature.RETURN_HOME
+    )
+    # Commands that exist only on the MQTT transport.
+    _MQTT_FEATURES = (
+        VacuumEntityFeature.PAUSE | VacuumEntityFeature.FAN_SPEED | VacuumEntityFeature.LOCATE
     )
 
     def __init__(self, coordinator: SharkCoordinator, entry_title: str) -> None:
         """Initialize."""
         super().__init__(coordinator, entry_title)
         self._attr_unique_id = f"{coordinator.unique_id}_vacuum"
+        self._attr_supported_features = self._BASE_FEATURES
+        if coordinator.use_mqtt:
+            self._attr_supported_features |= self._MQTT_FEATURES
+            if coordinator.capabilities.has_rooms:
+                self._attr_supported_features |= VacuumEntityFeature.CLEAN_AREA
+        self._segments_checked: list[str] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last suction level set."""
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            self.coordinator.restore_suction(last.attributes.get("fan_speed"))
+        self._check_segments()
+
+    @property
+    def fan_speed(self) -> str | None:
+        """The last suction level set (the robot never reports it)."""
+        return self.coordinator.suction.value if self.coordinator.suction else None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._check_segments()
+        super()._handle_coordinator_update()
 
     @property
     def activity(self) -> VacuumActivity | None:
@@ -67,6 +110,9 @@ class SharkVacuum(SharkBaseEntity, StateVacuumEntity):
         if self.coordinator.data is None:
             return None
         status = self.coordinator.data.status
+        # A live fault is an error whatever the state field says.
+        if any(status.errors or ()):
+            return VacuumActivity.ERROR
         return MODE_TO_ACTIVITY.get(status.mode, VacuumActivity.IDLE)
 
     @property
@@ -75,44 +121,172 @@ class SharkVacuum(SharkBaseEntity, StateVacuumEntity):
         if self.coordinator.data is None:
             return {}
         status = self.coordinator.data.status
-        return {
+        attrs: dict[str, Any] = {
             "shark_mode": status.mode.value if status.mode else None,
             "charging": status.charging,
             "battery_level": status.battery_level,
         }
+        if status.job_active is not None:
+            attrs["matrix_clean"] = bool(status.job_active and status.deep_clean)
+        if rooms := self._room_names():
+            attrs["rooms"] = [name.strip() for name in rooms]
+        return attrs
+
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+
+    async def _command(self, name: str, call: Any) -> None:
+        """Await a client command, surfacing failures to the caller."""
+        try:
+            await call
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        except SharklocalError as err:
+            raise HomeAssistantError(
+                f"{name} failed for {self.coordinator.host}: {err}"
+            ) from err
+        await self.coordinator.async_request_refresh()
 
     async def async_start(self) -> None:
-        """Start cleaning."""
-        try:
-            await self.coordinator.client.start_cleaning()
-        except SharklocalError as err:
-            _LOGGER.error("start_cleaning failed for %s: %s", self.coordinator.host, err)
-            return
-        await self.coordinator.async_request_refresh()
-
-    async def async_stop(self, **kwargs: Any) -> None:
-        """Stop cleaning."""
-        try:
-            await self.coordinator.client.stop()
-        except SharklocalError as err:
-            _LOGGER.error("stop failed for %s: %s", self.coordinator.host, err)
-            return
-        await self.coordinator.async_request_refresh()
+        """Start cleaning, or resume a paused job."""
+        data = self.coordinator.data
+        resuming = data is not None and data.status.mode == VacuumMode.PAUSED
+        if not resuming:
+            await self._reapply_suction()
+        await self._command("start_cleaning", self.coordinator.client.start_cleaning())
+        # Start is USR_CTR_RESUME: a paused room or spot job carries on where
+        # it was (measured 2026-09-27), so only a fresh start is whole-home.
+        if not resuming:
+            self.coordinator.set_job_target(None)
 
     async def async_pause(self) -> None:
-        """Pause — Shark exposes 'stop' which functions as pause."""
-        try:
-            await self.coordinator.client.stop()
-        except SharklocalError as err:
-            _LOGGER.error("pause failed for %s: %s", self.coordinator.host, err)
-            return
-        await self.coordinator.async_request_refresh()
+        """Pause the job; Start resumes it."""
+        await self._command("pause", self.coordinator.client.pause())
+
+    async def async_stop(self, **kwargs: Any) -> None:
+        """Stop cleaning (the robot returns to its dock)."""
+        await self._command("stop", self.coordinator.client.stop())
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Return to dock."""
-        try:
-            await self.coordinator.client.go_home()
-        except SharklocalError as err:
-            _LOGGER.error("go_home failed for %s: %s", self.coordinator.host, err)
+        await self._command("go_home", self.coordinator.client.go_home())
+
+    async def async_locate(self, **kwargs: Any) -> None:
+        """Play the locate sound."""
+        await self._command("find_robot", self.coordinator.client.find_robot())
+
+    async def _reapply_suction(self) -> None:
+        """Send the held suction level before a fresh job starts.
+
+        The robot keeps a level for one job and then goes back to normal
+        (measured 2026-09-27: eco set while docked ran the next job at 50%,
+        and the job after it at 82% with nothing sent), so a level chosen here
+        would otherwise hold for one job while the select went on showing it.
+        A spot clean runs its own fixed level (90%) whatever is set, so it is
+        not sent there.
+        """
+        if self.coordinator.suction is None:
             return
-        await self.coordinator.async_request_refresh()
+        try:
+            await self.coordinator.client.set_suction(self.coordinator.suction)
+        except SharklocalError as err:
+            raise HomeAssistantError(
+                f"set_suction failed for {self.coordinator.host}: {err}"
+            ) from err
+
+    async def async_set_fan_speed(self, fan_speed: str, **kwargs: Any) -> None:
+        """Set the suction level."""
+        if fan_speed not in FAN_SPEEDS:
+            raise ServiceValidationError(
+                f"Unknown fan speed {fan_speed!r}; choose from {FAN_SPEEDS}"
+            )
+        await self._command(
+            "set_suction", self.coordinator.async_set_suction(SuctionLevel(fan_speed))
+        )
+
+    # ------------------------------------------------------------------
+    # Rooms
+    # ------------------------------------------------------------------
+
+    def _room_names(self) -> list[str]:
+        data = self.coordinator.data
+        if data is None or data.persisted_map is None:
+            return []
+        return [room.name for room in data.persisted_map.named_rooms]
+
+    def resolve_rooms(self, requested: list[str]) -> list[str]:
+        """Map requested names to the map's exact room names.
+
+        The app lets rooms carry stray whitespace and punctuation ("Bathroom. ")
+        that nobody will type — and map cards only accept letters, digits,
+        spaces and underscores in a room id — so matching ignores case and
+        everything but letters and digits. The robot is still sent the name
+        exactly as stored.
+        """
+        known = self._room_names()
+        if not known:
+            raise ServiceValidationError(
+                "No room map yet; the robot publishes one when it next docks"
+            )
+
+        def key(name: str) -> str:
+            return re.sub(r"[\W_]+", "", name.casefold())
+
+        by_key = {key(name): name for name in known}
+        resolved: list[str] = []
+        for name in requested:
+            exact = name if name in known else by_key.get(key(name))
+            if exact is None:
+                raise ServiceValidationError(
+                    f"Unknown room {name!r}; the map has "
+                    f"{[k.strip() for k in known]}"
+                )
+            resolved.append(exact)
+        return resolved
+
+    async def async_clean_rooms(self, rooms: list[str], matrix: bool = False) -> None:
+        """Clean the named rooms, optionally with a Matrix (two-pass) clean."""
+        if matrix and not self.coordinator.capabilities.has_ultra_clean:
+            raise ServiceValidationError("This robot type has no Matrix clean")
+        names = self.resolve_rooms(rooms)
+        await self._reapply_suction()
+        await self._command(
+            "clean_rooms", self.coordinator.client.clean_rooms(names, deep=matrix)
+        )
+        self.coordinator.set_job_target(JobTarget(rooms=tuple(names)))
+
+    async def async_clean_spot_at(self, x: float, y: float) -> None:
+        """Spot-clean a ~1.5 m square around a point on the map, in metres."""
+        if not self.coordinator.capabilities.has_pin_drop:
+            raise ServiceValidationError("This robot type has no spot clean")
+        await self._command("clean_spot", self.coordinator.client.clean_spot(x, y))
+        self.coordinator.set_job_target(JobTarget(zone=tuple(spot_polygon(x, y))))
+
+    async def async_get_segments(self) -> list[Segment]:
+        """Return the rooms on the latest map, for HA's area mapping."""
+        return _segments(self._room_names())
+
+    async def async_clean_segments(self, segment_ids: list[str], **kwargs: Any) -> None:
+        """Clean the rooms HA mapped to the requested areas."""
+        await self.async_clean_rooms(segment_ids)
+
+    @callback
+    def _check_segments(self) -> None:
+        """Raise HA's repair issue when the rooms no longer match the area mapping.
+
+        Renaming a room in the app changes its id here, which would otherwise
+        silently break the area mapping.
+        """
+        if (
+            self.registry_entry is None
+            or VacuumEntityFeature.CLEAN_AREA not in self.supported_features
+        ):
+            return
+        names = self._room_names()
+        if not names or names == self._segments_checked:
+            return
+        self._segments_checked = names
+        last_seen = self.last_seen_segments
+        if last_seen is not None and {s.id for s in last_seen} != set(names):
+            self.async_create_segments_issue()
