@@ -11,11 +11,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements_test.txt
       - uses: astral-sh/setup-uv@v7
       - name: Install test dependencies
         run: uv pip install --system -r requirements_test.txt
+      - name: Overlay the production Home Assistant Core version
+        run: >-
+          uv pip install --system --upgrade --no-deps
+          "homeassistant @ git+https://github.com/home-assistant/core.git@2026.10.4"
       - name: Run tests
         run: pytest
