@@ -1,1 +1,3 @@
-pytest-homeassistant-custom-component
+pytest-homeassistant-custom-component==0.13.316
+git+https://github.com/rellerton/sharklocal@76d335bdc8ead49ab8b1c3f833c0aebbb3abedbc#sharklocal==0.3.0.dev14
+pillow

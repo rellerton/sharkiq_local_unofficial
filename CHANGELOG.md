@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-10-26
+
+### Changed
+- Rebased the development line on Andrew's map, room-cleaning, settings, and
+  state-decoding work.
+- Pinned the integration to the immutable `sharklocal` 0.3.0.dev14 commit in
+  the `rellerton/sharklocal` fork.
+- Raised this fork's declared minimum to Home Assistant 2026.10.0 while its
+  2026.10 validation and lab soak are completed.
+
+### Fixed
+- RV2500AA docked/charging status is decoded from the robot system state rather
+  than the unrelated Wi-Fi status field.
+- Local REST failures are bounded so MQTT-only robots can finish discovery.
+- Windows command-line MQTT discovery uses the compatible selector event loop.
+
 ## [0.3.0] - 2026-05-25
 
 ### Changed

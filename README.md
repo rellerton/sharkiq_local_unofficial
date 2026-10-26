@@ -1,7 +1,14 @@
 # Shark IQ (Local, Unofficial) — Home Assistant Integration
 
-[![hassfest](https://github.com/charger68/sharkiq_local_unofficial/actions/workflows/hassfest.yml/badge.svg)](https://github.com/charger68/sharkiq_local_unofficial/actions/workflows/hassfest.yml)
-[![HACS](https://github.com/charger68/sharkiq_local_unofficial/actions/workflows/hacs.yml/badge.svg)](https://github.com/charger68/sharkiq_local_unofficial/actions/workflows/hacs.yml)
+[![hassfest](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/hassfest.yml/badge.svg)](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/hassfest.yml)
+[![HACS](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/hacs.yml/badge.svg)](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/hacs.yml)
+[![Tests](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/test.yml/badge.svg)](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/test.yml)
+
+> [!IMPORTANT]
+> This fork is an experimental development build based on Andrew's map and
+> controls branch. It is being hardened for an RV2500AA and Home Assistant
+> 2026.10 before any production installation. It is not a HACS default
+> repository.
 
 A Home Assistant custom integration for **Shark IQ robot vacuums**, powered by the [`sharklocal`](https://github.com/sharkiqlibs/sharklocal) library. Talks to your vacuums entirely over your LAN — no cloud account or internet round-trip.
 
@@ -19,7 +26,7 @@ Supports **multiple vacuums** — add each one through the UI and they appear as
 
 ## Requirements
 
-- Home Assistant 2025.1 or newer (uses the new `VacuumActivity` API)
+- Home Assistant 2026.10 or newer for this development fork
 - Python 3.11+ (HA already meets this)
 - Each Shark IQ on your network with a known IP — give them static DHCP reservations
 
@@ -29,7 +36,7 @@ Supports **multiple vacuums** — add each one through the UI and they appear as
 
 1. In HACS, go to **Integrations**
 2. Click the three-dot menu (top right) → **Custom repositories**
-3. Add `https://github.com/charger68/sharkiq_local_unofficial` with category **Integration**
+3. Add `https://github.com/rellerton/sharkiq_local_unofficial` with category **Integration**
 4. Find **Shark IQ (Local, Unofficial)** in the integrations list and install
 5. Restart Home Assistant
 
@@ -127,5 +134,6 @@ automation:
 
 ## Credits
 
-- [`sharklocal`](https://github.com/sharkiqlibs/sharklocal) — the underlying Python library doing all the protocol work
+- [`rellerton/sharklocal`](https://github.com/rellerton/sharklocal) — the pinned development library used by this fork
+- [`andrew-from-toronto/sharkiq_local_unofficial`](https://github.com/andrew-from-toronto/sharkiq_local_unofficial) — map, controls, and state-decoding development base
 - The Shark IQ reverse-engineering community
