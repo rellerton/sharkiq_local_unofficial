@@ -17,9 +17,5 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install test dependencies
         run: uv pip install --system -r requirements_test.txt
-      - name: Overlay the production Home Assistant Core version
-        run: >-
-          uv pip install --system --upgrade
-          "homeassistant @ git+https://github.com/home-assistant/core.git@2026.10.4"
       - name: Run tests
         run: pytest
