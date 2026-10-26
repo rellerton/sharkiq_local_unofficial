@@ -12,8 +12,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements_test.txt
       - uses: astral-sh/setup-uv@v7
       - name: Install test dependencies
         run: uv pip install --system -r requirements_test.txt
