@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar, entity_registry as er
 
 from sharklocal import ConnectError
-from sharklocal.models import SPOT_ROOM_NAME, MapRoom, VacuumMode
+from sharklocal.models import SPOT_ROOM_NAME, MapRoom, VacuumLogEntry, VacuumMode
 from sharklocal.vacuum_map import spot_polygon
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -475,6 +475,23 @@ async def test_last_job_details_and_firmware_from_the_log(hass, entry, robot):
     device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "192.0.2.10"), entry.entry_id)
     assert device.sw_version == "V6.6.10-P7.N3308.17.0-Sep 21 2023"
     assert device.hw_version == "Lidar2_0M1.0.91"
+
+
+async def test_job_battery_ignores_boot_relative_zero(hass, entry, robot):
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    vacuum_map.log = [
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 18, "0"),
+        VacuumLogEntry("DT_STATE_CHANGE", 1_793_106_000, "SYS_ST_CLEANING"),
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 1_793_106_000, "100"),
+        *vacuum_map.log,
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 12_832, "31"),
+    ]
+    await push(hass, entry, docked_status(map=vacuum_map))
+
+    mode = hass.states.get("sensor.basement_shark_last_clean_mode")
+    assert mode.attributes["battery_start"] == 100
+    assert mode.attributes["battery_end"] == 31
 
 
 async def test_firmware_is_known_after_a_restart(hass, entry, robot):
