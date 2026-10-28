@@ -1,23 +1,21 @@
-"""Image platform for Shark IQ (Local): the live map."""
+"""Camera platform for Shark IQ (Local): the live map."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.image import ImageEntity
+from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util import dt as dt_util
-
-from sharklocal.models import VacuumMode
-
-from sharklocal.models import VacuumMap
+from sharklocal.models import VacuumMap, VacuumMode
 
 from .const import CONF_NAME, DOMAIN
 from .coordinator import JobTarget, SharkCoordinator
 from .entity import SharkBaseEntity
 from .map_render import Canvas, render_map
+
+MAP_FRAME_INTERVAL = 2.0
 
 
 async def async_setup_entry(
@@ -25,26 +23,28 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the map image (MQTT only: maps are never served over REST)."""
+    """Set up the map camera (MQTT only: maps are never served over REST)."""
     coordinator: SharkCoordinator = hass.data[DOMAIN][entry.entry_id]
     if coordinator.use_mqtt and coordinator.capabilities.has_map:
-        async_add_entities([SharkMapImage(coordinator, entry.data[CONF_NAME])])
+        async_add_entities([SharkMapCamera(coordinator, entry.data[CONF_NAME])])
 
 
-class SharkMapImage(SharkBaseEntity, ImageEntity):
+class SharkMapCamera(SharkBaseEntity, Camera):
     """The map as the robot last published it, with the path cleaned so far.
 
-    During a job the robot publishes a live frame every few seconds, so the
-    picture follows the robot; between jobs it shows the persisted map.
+    The camera's stable ``idle`` state avoids recording every map frame. A live
+    camera viewer receives an MJPEG still-image stream at the robot's normal map
+    cadence; a still-image request receives the most recent rendered map.
     """
 
-    _attr_content_type = "image/png"
+    _attr_frame_interval = MAP_FRAME_INTERVAL
     _attr_translation_key = "map"
 
     def __init__(self, coordinator: SharkCoordinator, entry_title: str) -> None:
         """Initialize."""
         SharkBaseEntity.__init__(self, coordinator, entry_title)
-        ImageEntity.__init__(self, coordinator.hass)
+        Camera.__init__(self)
+        self.content_type = "image/png"
         self._attr_unique_id = f"{coordinator.unique_id}_map"
         self._drawn: _Picture | None = None
         self._png: bytes | None = None
@@ -72,10 +72,11 @@ class SharkMapImage(SharkBaseEntity, ImageEntity):
         # new job target) is a new picture, and rendering waits until something
         # asks for it.
         current = self._current()
-        if current is not None and (self._drawn is None or not current.same_as(self._drawn)):
+        if current is not None and (
+            self._drawn is None or not current.same_as(self._drawn)
+        ):
             self._drawn = current
             self._png = None
-            self._attr_image_last_updated = dt_util.utcnow()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -84,18 +85,15 @@ class SharkMapImage(SharkBaseEntity, ImageEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Calibration for vacuum map cards: map metres to picture pixels.
-
-        With it, a card such as the Xiaomi Vacuum Map Card can turn a tap on the
-        picture into map coordinates for the clean_spot service (set the card's
-        coordinates_rounding to false: the map is in metres).
-        """
+        """Calibration for vacuum map cards: map metres to picture pixels."""
         if self._drawn is None:
             return None
         canvas = Canvas.fit(self._drawn.vacuum_map, self._drawn.rooms_from)
         return {"calibration_points": canvas.calibration_points()}
 
-    async def async_image(self) -> bytes | None:
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
         """Return the rendered map, drawing it on first request."""
         if self._drawn is None:
             return None

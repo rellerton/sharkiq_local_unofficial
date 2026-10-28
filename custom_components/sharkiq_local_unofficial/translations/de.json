@@ -46,7 +46,7 @@
         "name": "Erkundungsfahrt"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Karte"
       }

@@ -46,7 +46,7 @@
         "name": "Przejazd rozpoznawczy"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Mapa"
       }

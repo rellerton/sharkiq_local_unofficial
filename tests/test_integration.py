@@ -41,7 +41,7 @@ async def test_entities_come_up_from_mqtt_alone(hass, entry, robot):
     assert hass.states.get("sensor.basement_shark_battery").state == "100"
     assert hass.states.get("switch.basement_shark_recharge_resume").state == "on"
     assert hass.states.get("switch.basement_shark_evac_resume").state == "off"
-    assert hass.states.get("image.basement_shark_map") is not None
+    assert hass.states.get("camera.basement_shark_map") is not None
     # No map has been published yet, so nothing claims to know the last job.
     assert hass.states.get("sensor.basement_shark_last_clean_area").state == "unknown"
     assert "rooms" not in hass.states.get(VACUUM).attributes
@@ -372,28 +372,64 @@ async def test_state_and_temperature(hass, entry, robot):
     assert hass.states.get(temperature).state == "21"
 
 
-async def test_map_image_follows_the_live_frames(hass, entry, robot, hass_client):
+async def test_map_camera_follows_the_live_frames_without_changing_state(
+    hass, entry, robot, hass_client
+):
     await setup(hass, entry)
     client = await hass_client()
     await push_persisted_map(hass, entry)
-    first = hass.states.get("image.basement_shark_map")
+    first = hass.states.get("camera.basement_shark_map")
 
     token = first.attributes["access_token"]
-    response = await client.get(f"/api/image_proxy/image.basement_shark_map?token={token}")
+    response = await client.get(
+        f"/api/camera_proxy/camera.basement_shark_map?token={token}"
+    )
     assert response.status == HTTPStatus.OK
-    assert (await response.read()).startswith(b"\x89PNG")
+    first_png = await response.read()
+    assert first_png.startswith(b"\x89PNG")
+
+    stream = await client.get(
+        f"/api/camera_proxy_stream/camera.basement_shark_map?token={token}"
+    )
+    assert stream.status == HTTPStatus.OK
+    assert stream.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+    stream.close()
 
     await push(hass, entry, docked_status(map=decode_frame("sharkiq_live_map_frame.b64")))
-    assert hass.states.get("image.basement_shark_map").state != first.state
+    current = hass.states.get("camera.basement_shark_map")
+    assert current.state == first.state == "idle"
+    response = await client.get(
+        f"/api/camera_proxy/camera.basement_shark_map?token={token}"
+    )
+    assert response.status == HTTPStatus.OK
+    assert await response.read() != first_png
+
+
+async def test_map_frames_do_not_churn_the_camera_state(hass, entry, robot):
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    await push(hass, entry, docked_status(map=vacuum_map))
+    before = hass.states.get("camera.basement_shark_map")
+
+    # A newly decoded frame is a new map object even when its geometry and
+    # calibration are unchanged. It should refresh the stream, not Recorder.
+    await push(hass, entry, docked_status(map=dataclasses.replace(vacuum_map)))
+    after = hass.states.get("camera.basement_shark_map")
+
+    assert after.state == before.state == "idle"
+    assert after.attributes == before.attributes
+    assert after.last_updated == before.last_updated
 
 
 async def test_map_publishes_calibration_for_map_cards(hass, entry, robot):
     await setup(hass, entry)
-    assert "calibration_points" not in hass.states.get("image.basement_shark_map").attributes
+    assert "calibration_points" not in hass.states.get("camera.basement_shark_map").attributes
 
     await push_persisted_map(hass, entry)
 
-    points = hass.states.get("image.basement_shark_map").attributes["calibration_points"]
+    points = hass.states.get("camera.basement_shark_map").attributes[
+        "calibration_points"
+    ]
     assert len(points) == 3
     assert set(points[0]) == {"vacuum", "map"}
 
@@ -407,7 +443,7 @@ async def test_without_mqtt_only_the_rest_entities_exist(hass, robot):
 
     assert hass.states.get(VACUUM) is not None
     assert hass.states.get("switch.basement_shark_recharge_resume") is None
-    assert hass.states.get("image.basement_shark_map") is None
+    assert hass.states.get("camera.basement_shark_map") is None
     assert hass.states.get("sensor.basement_shark_last_clean_area") is None
 
 
@@ -420,14 +456,15 @@ async def test_spot_clean_draws_its_zone_until_the_job_ends(hass, entry, robot):
     await setup(hass, entry)
     await push_persisted_map(hass, entry)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    before = hass.states.get("image.basement_shark_map").state
+    camera = hass.data["camera"].get_entity("camera.basement_shark_map")
+    before = await camera.async_camera_image()
 
     await hass.services.async_call(
         DOMAIN, "clean_spot", {"entity_id": VACUUM, "x": 2.74, "y": 0.02}, blocking=True
     )
 
     assert coordinator.job_target.zone == tuple(spot_polygon(2.74, 0.02))
-    assert hass.states.get("image.basement_shark_map").state != before
+    assert await camera.async_camera_image() != before
 
     # The robot's end-of-job map records the zone as a room named PinDrop.
     saved = decode_frame("sharkiq_persisted_map_frame.b64")

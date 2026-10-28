@@ -46,7 +46,7 @@
         "name": "Explore run"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Map"
       }

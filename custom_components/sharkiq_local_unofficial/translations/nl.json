@@ -46,7 +46,7 @@
         "name": "Verkenningsrit"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Kaart"
       }

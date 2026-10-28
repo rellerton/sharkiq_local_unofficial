@@ -46,7 +46,7 @@
         "name": "Parcours d’exploration"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Carte"
       }

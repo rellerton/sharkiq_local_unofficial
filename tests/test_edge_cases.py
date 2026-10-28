@@ -320,22 +320,23 @@ async def test_switch_failure_is_an_error(hass, entry, robot):
 
 async def test_no_picture_before_the_first_map(hass, entry, robot):
     await setup(hass, entry)
-    assert await entity(hass, "image.basement_shark_map").async_image() is None
+    assert await entity(hass, "camera.basement_shark_map").async_camera_image() is None
 
 
 async def test_picture_is_drawn_once_per_map(hass, entry, robot):
     await setup(hass, entry)
     await push_persisted_map(hass, entry)
-    image = entity(hass, "image.basement_shark_map")
+    camera = entity(hass, "camera.basement_shark_map")
 
     with patch(
-        "custom_components.sharkiq_local_unofficial.image.render_map", return_value=b"png"
+        "custom_components.sharkiq_local_unofficial.camera.render_map",
+        return_value=b"png",
     ) as render:
-        assert await image.async_image() == b"png"
-        assert await image.async_image() == b"png"
+        assert await camera.async_camera_image() == b"png"
+        assert await camera.async_camera_image() == b"png"
         # A status frame without a map is not a new picture.
         await push(hass, entry, docked_status())
-        assert await image.async_image() == b"png"
+        assert await camera.async_camera_image() == b"png"
 
     render.assert_called_once()
 
