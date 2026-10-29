@@ -190,6 +190,9 @@ KNOWN: dict[str, str] = {
     "none": "None",
     "ERROR_NONE": "None",
     "WARN_NONE": "None",
+    # Recharge & Resume was abandoned because a terminal robot/dock fault
+    # occurred while the robot was servicing itself on the dock.
+    "RR_INT_SPECIAL_ERROR": "Recharge & Resume interrupted by error",
     # Relocation (status field 41).
     "RS_NONE": "None",
     "RS_RELOC": "Finding its position",

@@ -66,9 +66,16 @@ def _log_codes(data: SharkData, key: str) -> list[str] | None:
     job logged.
     """
     job = _last_job(data)
-    if job is None or not job.report:
+    if job is None:
         return None
-    return [entry.code for entry in job.log if entry.key == key]
+    codes = [entry.code for entry in job.log if entry.key == key]
+    # A normal map returned on request has no per-job event entries. Some
+    # firmware, however, returns the previous job's complete log while leaving
+    # the report flag clear. Treat only an actually present key as evidence in
+    # that case; absence still means unknown rather than "none".
+    if not job.report and not codes:
+        return None
+    return codes
 
 
 def _last_code(data: SharkData, key: str) -> str | None:
@@ -79,6 +86,47 @@ def _last_code(data: SharkData, key: str) -> str | None:
     if not codes:
         return "none"
     return end_reason(codes[-1]) if key == "DT_WFF_TERM_CODE" else codes[-1]
+
+
+def _job_outcome_code(data: SharkData) -> str | None:
+    """Return the whole-job outcome, preferring a later terminal interruption.
+
+    ``DT_WFF_TERM_CODE`` is emitted once per completed room/zone.  Its final
+    ``NORMAL`` value therefore does not prove that the whole job completed.  A
+    Recharge & Resume interruption is logged later when dock servicing aborts
+    the pending continuation, and must take precedence.
+    """
+    job = _last_job(data)
+    if job is None:
+        return None
+    if (
+        _log_codes(data, "DT_WFF_TERM_CODE") is None
+        and _log_codes(data, "DT_2R_INTERUPT_CODE") is None
+    ):
+        return None
+
+    outcome: str | None = None
+    for entry in job.log:
+        if entry.key == "DT_WFF_TERM_CODE":
+            outcome = end_reason(entry.code)
+        elif entry.key == "DT_2R_INTERUPT_CODE":
+            outcome = entry.code
+    return outcome or "none"
+
+
+def _job_outcome_attrs(data: SharkData) -> dict[str, Any]:
+    code = _job_outcome_code(data)
+    attrs: dict[str, Any] = {"code": code}
+    if code and code.startswith("RR_INT_"):
+        error_code = _last_code(data, "DT_ERROR_CODE")
+        attrs.update(
+            {
+                "error_code": error_code,
+                "error": describe(error_code),
+                "advice": advice(error_code),
+            }
+        )
+    return attrs
 
 
 def _clean_mode(data: SharkData) -> str | None:
@@ -278,8 +326,8 @@ SENSORS: tuple[SharkSensorDescription, ...] = (
         translation_key="last_end_reason",
         entity_category=EntityCategory.DIAGNOSTIC,
         mqtt_only=True,
-        value_fn=lambda data: describe(_last_code(data, "DT_WFF_TERM_CODE")),
-        attrs_fn=lambda data: _code_attrs(data, "DT_WFF_TERM_CODE"),
+        value_fn=lambda data: describe(_job_outcome_code(data)),
+        attrs_fn=_job_outcome_attrs,
     ),
     SharkSensorDescription(
         key="last_dock_reason",

@@ -109,6 +109,35 @@ async def test_a_job_that_logged_no_code_reads_none(hass, entry, robot):
     assert (end.state, end.attributes["code"]) == ("None", "none")
 
 
+async def test_recharge_resume_error_overrides_normal_room_completion(hass, entry, robot):
+    """A normal room result must not hide a later whole-job interruption."""
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    vacuum_map.log.extend(
+        [
+            VacuumLogEntry("DT_ERROR_CODE", 5480, "ERROR_AED_PROC_STUCK"),
+            VacuumLogEntry("DT_2R_INTERUPT_CODE", 5480, "RR_INT_SPECIAL_ERROR"),
+        ]
+    )
+    # This model re-sends the complete prior-job log on a requested map but
+    # clears the report flag, so the persisted summary must still use it.
+    vacuum_map.report = False
+    await push(hass, entry, docked_status(map=vacuum_map))
+
+    end = hass.states.get("sensor.basement_shark_last_job_end_reason")
+    assert end.state == "Recharge & Resume interrupted by error"
+    assert end.attributes == {
+        "code": "RR_INT_SPECIAL_ERROR",
+        "error_code": "ERROR_AED_PROC_STUCK",
+        "error": "Dust bin opening is blocked",
+        "advice": (
+            "Please remove debris and blockages from my dust bin opening and "
+            "from the debris intake opening on my dock."
+        ),
+        "friendly_name": "Basement Shark Last job end reason",
+    }
+
+
 async def test_clean_rooms_sends_what_the_app_sends(hass, entry, robot):
     await setup(hass, entry)
     await push_persisted_map(hass, entry)
