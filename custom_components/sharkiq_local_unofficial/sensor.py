@@ -25,7 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from sharklocal import codes as robot_codes
-from sharklocal.models import SPOT_ROOM_NAME, VacuumMap
+from sharklocal.models import SPOT_ROOM_NAME, VacuumMap, normalize_job_started
 
 from .codes import advice, describe, end_reason
 from .const import CONF_NAME, DOMAIN
@@ -52,9 +52,9 @@ def _last_job(data: SharkData) -> VacuumMap | None:
 
 def _job_started(data: SharkData) -> datetime | None:
     job = _last_job(data)
-    if job is None or not job.job_started:
+    if job is None or (started := normalize_job_started(job.job_started)) is None:
         return None
-    return datetime.fromtimestamp(job.job_started, UTC)
+    return datetime.fromtimestamp(started, UTC)
 
 
 def _log_codes(data: SharkData, key: str) -> list[str] | None:
