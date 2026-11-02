@@ -1,2 +1,3 @@
 git+https://github.com/MatthewFlamm/pytest-homeassistant-custom-component@0.13.375#pytest-homeassistant-custom-component==0.13.375
 git+https://github.com/rellerton/sharklocal@2447ff6dfd0ee1f3407f43cbefc674b6c5cfa469#sharklocal==0.3.0.dev15
+PyTurboJPEG==1.8.3
