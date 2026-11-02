@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-11-02
+
+### Added
+- Live cleaning maps are exposed as a recorder-safe camera entity while keeping
+  completed maps available when the robot is idle.
+- Completed and interrupted jobs expose readable outcome, fault, and recovery
+  details from the robot's event log.
+
+### Changed
+- Map labels now fit more reliably inside irregular room geometry.
+- Pinned the integration to immutable `sharklocal` 0.3.0.dev15, which consumes
+  expected MQTT monitor disconnects cleanly and permits polling to re-arm the
+  monitor without an unhandled task exception.
+
+### Fixed
+- Completed-job battery accounting no longer uses a later docked battery value.
+- A Recharge & Resume interruption now overrides earlier per-zone completion
+  events and retains the best persisted report for the interrupted job.
+
 ## [0.4.1] - 2026-10-26
 
 ### Changed

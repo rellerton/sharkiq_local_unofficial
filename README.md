@@ -5,10 +5,9 @@
 [![Tests](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/test.yml/badge.svg)](https://github.com/rellerton/sharkiq_local_unofficial/actions/workflows/test.yml)
 
 > [!IMPORTANT]
-> This fork is an experimental development build based on Andrew's map and
-> controls branch. It is being hardened for an RV2500AA and Home Assistant
-> 2026.10 before any production installation. It is not a HACS default
-> repository.
+> This fork is an experimental RV2500AA-focused build based on Andrew's map and
+> controls branch. It has completed a multi-run Home Assistant 2026.10 lab soak,
+> but it is not a HACS default repository.
 
 A Home Assistant custom integration for **Shark IQ robot vacuums**, powered by the [`sharklocal`](https://github.com/sharkiqlibs/sharklocal) library. Talks to your vacuums entirely over your LAN — no cloud account or internet round-trip.
 
@@ -42,7 +41,7 @@ Supports **multiple vacuums** — add each one through the UI and they appear as
 
 ### Option B: Manual
 
-1. Download the latest release zip from the [Releases page](https://github.com/charger68/sharkiq_local_unofficial/releases)
+1. Download the latest release zip from the [Releases page](https://github.com/rellerton/sharkiq_local_unofficial/releases)
 2. Extract and copy `custom_components/sharkiq_local_unofficial/` into your HA `config/custom_components/` directory
 3. Restart Home Assistant
 
