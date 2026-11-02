@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar, entity_registry as er
 
 from sharklocal import ConnectError
-from sharklocal.models import SPOT_ROOM_NAME, MapRoom, VacuumMode
+from sharklocal.models import SPOT_ROOM_NAME, MapRoom, VacuumLogEntry, VacuumMode
 from sharklocal.vacuum_map import spot_polygon
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -41,7 +41,7 @@ async def test_entities_come_up_from_mqtt_alone(hass, entry, robot):
     assert hass.states.get("sensor.basement_shark_battery").state == "100"
     assert hass.states.get("switch.basement_shark_recharge_resume").state == "on"
     assert hass.states.get("switch.basement_shark_evac_resume").state == "off"
-    assert hass.states.get("image.basement_shark_map") is not None
+    assert hass.states.get("camera.basement_shark_map") is not None
     # No map has been published yet, so nothing claims to know the last job.
     assert hass.states.get("sensor.basement_shark_last_clean_area").state == "unknown"
     assert "rooms" not in hass.states.get(VACUUM).attributes
@@ -107,6 +107,35 @@ async def test_a_job_that_logged_no_code_reads_none(hass, entry, robot):
 
     end = hass.states.get("sensor.basement_shark_last_job_end_reason")
     assert (end.state, end.attributes["code"]) == ("None", "none")
+
+
+async def test_recharge_resume_error_overrides_normal_room_completion(hass, entry, robot):
+    """A normal room result must not hide a later whole-job interruption."""
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    vacuum_map.log.extend(
+        [
+            VacuumLogEntry("DT_ERROR_CODE", 5480, "ERROR_AED_PROC_STUCK"),
+            VacuumLogEntry("DT_2R_INTERUPT_CODE", 5480, "RR_INT_SPECIAL_ERROR"),
+        ]
+    )
+    # This model re-sends the complete prior-job log on a requested map but
+    # clears the report flag, so the persisted summary must still use it.
+    vacuum_map.report = False
+    await push(hass, entry, docked_status(map=vacuum_map))
+
+    end = hass.states.get("sensor.basement_shark_last_job_end_reason")
+    assert end.state == "Recharge & Resume interrupted by error"
+    assert end.attributes == {
+        "code": "RR_INT_SPECIAL_ERROR",
+        "error_code": "ERROR_AED_PROC_STUCK",
+        "error": "Dust bin opening is blocked",
+        "advice": (
+            "Please remove debris and blockages from my dust bin opening and "
+            "from the debris intake opening on my dock."
+        ),
+        "friendly_name": "Basement Shark Last job end reason",
+    }
 
 
 async def test_clean_rooms_sends_what_the_app_sends(hass, entry, robot):
@@ -372,28 +401,64 @@ async def test_state_and_temperature(hass, entry, robot):
     assert hass.states.get(temperature).state == "21"
 
 
-async def test_map_image_follows_the_live_frames(hass, entry, robot, hass_client):
+async def test_map_camera_follows_the_live_frames_without_changing_state(
+    hass, entry, robot, hass_client
+):
     await setup(hass, entry)
     client = await hass_client()
     await push_persisted_map(hass, entry)
-    first = hass.states.get("image.basement_shark_map")
+    first = hass.states.get("camera.basement_shark_map")
 
     token = first.attributes["access_token"]
-    response = await client.get(f"/api/image_proxy/image.basement_shark_map?token={token}")
+    response = await client.get(
+        f"/api/camera_proxy/camera.basement_shark_map?token={token}"
+    )
     assert response.status == HTTPStatus.OK
-    assert (await response.read()).startswith(b"\x89PNG")
+    first_png = await response.read()
+    assert first_png.startswith(b"\x89PNG")
+
+    stream = await client.get(
+        f"/api/camera_proxy_stream/camera.basement_shark_map?token={token}"
+    )
+    assert stream.status == HTTPStatus.OK
+    assert stream.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+    stream.close()
 
     await push(hass, entry, docked_status(map=decode_frame("sharkiq_live_map_frame.b64")))
-    assert hass.states.get("image.basement_shark_map").state != first.state
+    current = hass.states.get("camera.basement_shark_map")
+    assert current.state == first.state == "idle"
+    response = await client.get(
+        f"/api/camera_proxy/camera.basement_shark_map?token={token}"
+    )
+    assert response.status == HTTPStatus.OK
+    assert await response.read() != first_png
+
+
+async def test_map_frames_do_not_churn_the_camera_state(hass, entry, robot):
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    await push(hass, entry, docked_status(map=vacuum_map))
+    before = hass.states.get("camera.basement_shark_map")
+
+    # A newly decoded frame is a new map object even when its geometry and
+    # calibration are unchanged. It should refresh the stream, not Recorder.
+    await push(hass, entry, docked_status(map=dataclasses.replace(vacuum_map)))
+    after = hass.states.get("camera.basement_shark_map")
+
+    assert after.state == before.state == "idle"
+    assert after.attributes == before.attributes
+    assert after.last_updated == before.last_updated
 
 
 async def test_map_publishes_calibration_for_map_cards(hass, entry, robot):
     await setup(hass, entry)
-    assert "calibration_points" not in hass.states.get("image.basement_shark_map").attributes
+    assert "calibration_points" not in hass.states.get("camera.basement_shark_map").attributes
 
     await push_persisted_map(hass, entry)
 
-    points = hass.states.get("image.basement_shark_map").attributes["calibration_points"]
+    points = hass.states.get("camera.basement_shark_map").attributes[
+        "calibration_points"
+    ]
     assert len(points) == 3
     assert set(points[0]) == {"vacuum", "map"}
 
@@ -407,7 +472,7 @@ async def test_without_mqtt_only_the_rest_entities_exist(hass, robot):
 
     assert hass.states.get(VACUUM) is not None
     assert hass.states.get("switch.basement_shark_recharge_resume") is None
-    assert hass.states.get("image.basement_shark_map") is None
+    assert hass.states.get("camera.basement_shark_map") is None
     assert hass.states.get("sensor.basement_shark_last_clean_area") is None
 
 
@@ -420,14 +485,15 @@ async def test_spot_clean_draws_its_zone_until_the_job_ends(hass, entry, robot):
     await setup(hass, entry)
     await push_persisted_map(hass, entry)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    before = hass.states.get("image.basement_shark_map").state
+    camera = hass.data["camera"].get_entity("camera.basement_shark_map")
+    before = await camera.async_camera_image()
 
     await hass.services.async_call(
         DOMAIN, "clean_spot", {"entity_id": VACUUM, "x": 2.74, "y": 0.02}, blocking=True
     )
 
     assert coordinator.job_target.zone == tuple(spot_polygon(2.74, 0.02))
-    assert hass.states.get("image.basement_shark_map").state != before
+    assert await camera.async_camera_image() != before
 
     # The robot's end-of-job map records the zone as a room named PinDrop.
     saved = decode_frame("sharkiq_persisted_map_frame.b64")
@@ -475,6 +541,23 @@ async def test_last_job_details_and_firmware_from_the_log(hass, entry, robot):
     device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "192.0.2.10"), entry.entry_id)
     assert device.sw_version == "V6.6.10-P7.N3308.17.0-Sep 21 2023"
     assert device.hw_version == "Lidar2_0M1.0.91"
+
+
+async def test_job_battery_ignores_boot_relative_zero(hass, entry, robot):
+    await setup(hass, entry)
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    vacuum_map.log = [
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 18, "0"),
+        VacuumLogEntry("DT_STATE_CHANGE", 1_793_106_000, "SYS_ST_CLEANING"),
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 1_793_106_000, "100"),
+        *vacuum_map.log,
+        VacuumLogEntry("DT_BATTERY_VALUE_AT_STATE_TRANS", 12_832, "31"),
+    ]
+    await push(hass, entry, docked_status(map=vacuum_map))
+
+    mode = hass.states.get("sensor.basement_shark_last_clean_mode")
+    assert mode.attributes["battery_start"] == 100
+    assert mode.attributes["battery_end"] == 31
 
 
 async def test_firmware_is_known_after_a_restart(hass, entry, robot):

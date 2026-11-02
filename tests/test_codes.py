@@ -12,6 +12,7 @@ from custom_components.sharkiq_local_unofficial.codes import describe, end_reaso
         ("WARN_MM_LOWLIGHT", "Map not updated: low light"),
         ("DE_USR_CTR_DOCK", "Sent to dock by user"),
         ("NORMAL", "Finished normally"),
+        ("RR_INT_SPECIAL_ERROR", "Recharge & Resume interrupted by error"),
         ("none", "None"),
         # Never seen: tidied, not guessed at.
         ("WARN_BRUSH_STUCK", "Brush stuck"),

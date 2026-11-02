@@ -32,7 +32,7 @@ MIN_SCAN_INTERVAL = 5
 MAX_SCAN_INTERVAL = 600
 
 # Platforms provided by this integration
-PLATFORMS = ["vacuum", "sensor", "switch", "select", "number", "button", "image"]
+PLATFORMS = ["vacuum", "sensor", "switch", "select", "number", "button", "camera"]
 
 # Event names fired on the HA bus
 EVENT_DUSTBIN_REMOVED = f"{DOMAIN}_dustbin_removed"

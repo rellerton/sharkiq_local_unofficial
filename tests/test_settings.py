@@ -58,7 +58,7 @@ async def test_a_lidar_robot_gets_the_lidar_settings(hass, robot):
     entry = await setup(hass)
     assert settings(hass, entry) == {"recharge_resume", "evac_resume", "do_not_disturb"}
     ids = entity_ids(hass, entry)
-    assert {VOLUME, EXPLORE, f"image.{PREFIX}_map"} <= ids
+    assert {VOLUME, EXPLORE, f"camera.{PREFIX}_map"} <= ids
     assert CARPET not in ids
     assert hass.states.get(VACUUM).attributes["supported_features"] & CLEAN_AREA
 

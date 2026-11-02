@@ -7,7 +7,13 @@ import pytest
 
 from PIL import Image
 
-from custom_components.sharkiq_local_unofficial.map_render import SCALE, render_map
+from custom_components.sharkiq_local_unofficial.map_render import (
+    SCALE,
+    Canvas,
+    _box_overlap,
+    _label_layout,
+    render_map,
+)
 
 from .conftest import decode_frame
 
@@ -18,6 +24,27 @@ def test_renders_the_persisted_map():
     # At least the grid; wider where room outlines reach past what was explored.
     assert image.size[0] >= vacuum_map.grid.width * SCALE
     assert image.size[1] >= vacuum_map.grid.height * SCALE
+
+
+def test_room_labels_stay_in_bounds_without_overlapping():
+    vacuum_map = decode_frame("sharkiq_persisted_map_frame.b64")
+    canvas = Canvas.fit(vacuum_map)
+    labels = _label_layout(
+        vacuum_map,
+        canvas.px,
+        max(1.5, canvas.width * (1 / 329)),
+        (canvas.width, canvas.height),
+        set(),
+        False,
+    )
+
+    assert len(labels) == len(vacuum_map.named_rooms)
+    for label in labels:
+        left, top, right, bottom = label.box
+        assert 0 <= left < right <= canvas.width
+        assert 0 <= top < bottom <= canvas.height
+    for index, label in enumerate(labels):
+        assert all(_box_overlap(label.box, other.box) == 0 for other in labels[index + 1 :])
 
 
 def test_renders_a_live_frame_with_rooms_from_the_persisted_map():

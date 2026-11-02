@@ -413,32 +413,126 @@ def _paste_centred(image: Image.Image, marker: Image.Image, centre: tuple[float,
 
 
 def _labels(image, source, px, dp: float, target_rooms: set[str], whole_home: bool) -> None:
-    """The app's stadium pills: white with dark text, purple when picked."""
+    """The app's stadium pills, fitted to rooms without covering each other."""
     draw = ImageDraw.Draw(image)
-    font = _font(max(8, round(13.3 * dp)))
-    height = 1.43 * font.size
-    for room in source.named_rooms:
-        if not room.polygon:
-            continue
-        points = [px(p) for p in room.polygon]
-        cx = (min(x for x, _ in points) + max(x for x, _ in points)) / 2
-        cy = (min(y for _, y in points) + max(y for _, y in points)) / 2
-        name = room.name.strip()
-        text_width = draw.textlength(name, font=font)
-        half = text_width / 2 + 4 * dp + 0.04 * text_width
-        # Keep the pill inside the picture: a room at the edge would clip it.
-        cx = min(max(cx, half + 2), image.width - half - 2)
-        cy = min(max(cy, height / 2 + 2), image.height - height / 2 - 2)
-        box = (cx - half, cy - height / 2, cx + half, cy + height / 2)
-        picked = room.name in target_rooms or whole_home
+    for label in _label_layout(source, px, dp, image.size, target_rooms, whole_home):
+        font = _font(label.font_size)
         draw.rounded_rectangle(
-            box,
-            radius=height / 2,
-            fill=PURPLE if picked else PILL,
-            outline=PURPLE if picked else PILL_BORDER,
+            label.box,
+            radius=(label.box[3] - label.box[1]) / 2,
+            fill=PURPLE if label.picked else PILL,
+            outline=PURPLE if label.picked else PILL_BORDER,
             width=max(1, round(dp)),
         )
-        draw.text((cx, cy), name, font=font, fill=PILL if picked else LABEL_TEXT, anchor="mm")
+        draw.text(
+            label.center,
+            label.name,
+            font=font,
+            fill=PILL if label.picked else LABEL_TEXT,
+            anchor="mm",
+        )
+
+
+@dataclass(frozen=True)
+class _MapLabel:
+    name: str
+    center: tuple[float, float]
+    box: tuple[float, float, float, float]
+    font_size: int
+    picked: bool
+
+
+def _label_layout(
+    source: VacuumMap,
+    px: Any,
+    dp: float,
+    image_size: tuple[int, int],
+    target_rooms: set[str],
+    whole_home: bool,
+) -> list[_MapLabel]:
+    """Fit labels to their rooms and choose positions with minimal overlap."""
+    measure = ImageDraw.Draw(Image.new("L", (1, 1)))
+    image_width, image_height = image_size
+    placed: list[tuple[float, float, float, float]] = []
+    labels: list[_MapLabel] = []
+
+    for room in source.named_rooms:
+        name = room.name.strip()
+        if not name or not room.polygon:
+            continue
+        points = [px(point) for point in room.polygon]
+        left, right = min(x for x, _ in points), max(x for x, _ in points)
+        top, bottom = min(y for _, y in points), max(y for _, y in points)
+        room_width, room_height = right - left, bottom - top
+        max_width = max(32.0, min(image_width - 4.0, room_width * 0.78))
+        max_height = max(18.0, min(room_height * 0.30, 17.0 * dp))
+        font_size = max(8, round(8.5 * dp))
+        minimum = max(8, round(3.2 * dp))
+
+        while font_size > minimum:
+            font = _font(font_size)
+            text_width = measure.textlength(name, font=font)
+            pill_width = text_width * 1.08 + 8 * dp
+            pill_height = 1.43 * font_size
+            if pill_width <= max_width and pill_height <= max_height:
+                break
+            font_size -= 1
+
+        font = _font(font_size)
+        text_width = measure.textlength(name, font=font)
+        pill_width = min(max_width, text_width * 1.08 + 8 * dp)
+        pill_height = min(max_height, 1.43 * font_size)
+        half_width, half_height = pill_width / 2, pill_height / 2
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        candidates = (
+            (cx, cy),
+            (cx, top + room_height * 0.30),
+            (cx, top + room_height * 0.70),
+            (left + room_width * 0.30, cy),
+            (left + room_width * 0.70, cy),
+        )
+
+        choices: list[tuple[float, tuple[float, float], tuple[float, float, float, float]]] = []
+        for candidate_x, candidate_y in candidates:
+            candidate_x = min(
+                max(candidate_x, max(left + half_width, half_width + 2)),
+                min(right - half_width, image_width - half_width - 2),
+            )
+            candidate_y = min(
+                max(candidate_y, max(top + half_height, half_height + 2)),
+                min(bottom - half_height, image_height - half_height - 2),
+            )
+            box = (
+                candidate_x - half_width,
+                candidate_y - half_height,
+                candidate_x + half_width,
+                candidate_y + half_height,
+            )
+            overlap = sum(_box_overlap(box, other) for other in placed)
+            choices.append((overlap, (candidate_x, candidate_y), box))
+
+        _, center, box = min(choices, key=lambda choice: choice[0])
+        placed.append(box)
+        labels.append(
+            _MapLabel(
+                name=name,
+                center=center,
+                box=box,
+                font_size=font_size,
+                picked=room.name in target_rooms or whole_home,
+            )
+        )
+    return labels
+
+
+def _box_overlap(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> float:
+    """Area shared by two boxes, zero when they do not intersect."""
+    width = max(0.0, min(first[2], second[2]) - max(first[0], second[0]))
+    height = max(0.0, min(first[3], second[3]) - max(first[1], second[1]))
+    return width * height
 
 
 def _spot_zone(image: Image.Image, points: list[tuple[float, float]], dp: float) -> None:

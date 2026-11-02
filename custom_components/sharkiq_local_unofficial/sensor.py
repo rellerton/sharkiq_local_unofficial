@@ -66,9 +66,16 @@ def _log_codes(data: SharkData, key: str) -> list[str] | None:
     job logged.
     """
     job = _last_job(data)
-    if job is None or not job.report:
+    if job is None:
         return None
-    return [entry.code for entry in job.log if entry.key == key]
+    codes = [entry.code for entry in job.log if entry.key == key]
+    # A normal map returned on request has no per-job event entries. Some
+    # firmware, however, returns the previous job's complete log while leaving
+    # the report flag clear. Treat only an actually present key as evidence in
+    # that case; absence still means unknown rather than "none".
+    if not job.report and not codes:
+        return None
+    return codes
 
 
 def _last_code(data: SharkData, key: str) -> str | None:
@@ -79,6 +86,47 @@ def _last_code(data: SharkData, key: str) -> str | None:
     if not codes:
         return "none"
     return end_reason(codes[-1]) if key == "DT_WFF_TERM_CODE" else codes[-1]
+
+
+def _job_outcome_code(data: SharkData) -> str | None:
+    """Return the whole-job outcome, preferring a later terminal interruption.
+
+    ``DT_WFF_TERM_CODE`` is emitted once per completed room/zone.  Its final
+    ``NORMAL`` value therefore does not prove that the whole job completed.  A
+    Recharge & Resume interruption is logged later when dock servicing aborts
+    the pending continuation, and must take precedence.
+    """
+    job = _last_job(data)
+    if job is None:
+        return None
+    if (
+        _log_codes(data, "DT_WFF_TERM_CODE") is None
+        and _log_codes(data, "DT_2R_INTERUPT_CODE") is None
+    ):
+        return None
+
+    outcome: str | None = None
+    for entry in job.log:
+        if entry.key == "DT_WFF_TERM_CODE":
+            outcome = end_reason(entry.code)
+        elif entry.key == "DT_2R_INTERUPT_CODE":
+            outcome = entry.code
+    return outcome or "none"
+
+
+def _job_outcome_attrs(data: SharkData) -> dict[str, Any]:
+    code = _job_outcome_code(data)
+    attrs: dict[str, Any] = {"code": code}
+    if code and code.startswith("RR_INT_"):
+        error_code = _last_code(data, "DT_ERROR_CODE")
+        attrs.update(
+            {
+                "error_code": error_code,
+                "error": describe(error_code),
+                "advice": advice(error_code),
+            }
+        )
+    return attrs
 
 
 def _clean_mode(data: SharkData) -> str | None:
@@ -106,15 +154,54 @@ def _log_numbers(job: VacuumMap, predicate: Callable[[str], bool]) -> list[int]:
     return [int(e.code) for e in job.log if predicate(e.key) and e.code.lstrip("-").isdigit()]
 
 
+def _job_battery(job: VacuumMap) -> tuple[int | None, int | None]:
+    """Return the battery at the real job start and at its final transition.
+
+    A completed report can begin with a short boot-relative diagnostic block.
+    On the RV2500AA that block contains a placeholder battery value of zero,
+    before the same log records the actual epoch-dated cleaning transition and
+    its 100 percent battery value.  Prefer the battery paired with that
+    epoch-dated transition; older reports without one retain the first usable
+    positive battery value as their fallback.  The last transition remains the
+    best end-of-job reading for every termination path.
+    """
+    readings: list[tuple[int, int]] = []
+    for index, entry in enumerate(job.log):
+        if (
+            entry.key == "DT_BATTERY_VALUE_AT_STATE_TRANS"
+            and entry.code.isdigit()
+            and 0 <= (value := int(entry.code)) <= 100
+        ):
+            readings.append((index, value))
+
+    if not readings:
+        return None, None
+
+    start: int | None = None
+    for index, entry in enumerate(job.log):
+        if (
+            entry.key == "DT_STATE_CHANGE"
+            and entry.code == "SYS_ST_CLEANING"
+            and entry.time >= 1_000_000_000
+        ):
+            start = next((value for at, value in readings if at > index), None)
+            if start is not None:
+                break
+
+    if start is None:
+        start = next((value for _, value in readings if value > 0), readings[0][1])
+    return start, readings[-1][1]
+
+
 def _job_details(data: SharkData) -> dict[str, Any] | None:
     """What the robot's log says about the last job, beyond area and time."""
     if (job := _last_job(data)) is None:
         return None
-    battery = _log_numbers(job, lambda key: key == "DT_BATTERY_VALUE_AT_STATE_TRANS")
+    battery_start, battery_end = _job_battery(job)
     return {
         "code": _clean_mode(data),
-        "battery_start": battery[0] if battery else None,
-        "battery_end": battery[-1] if battery else None,
+        "battery_start": battery_start,
+        "battery_end": battery_end,
         "bumper_hits": sum(_log_numbers(job, lambda k: k.startswith("DT_BUMPER_") and k.endswith("_COUNTER"))),
         "cliff_events": sum(_log_numbers(job, lambda k: k.startswith("DT_CLIFF_") and k.endswith("_COUNTER"))),
         "obstacles_avoided": sum(_log_numbers(job, lambda k: k.startswith("DT_IR_AVOID_") and k.endswith("_COUNTER"))),
@@ -239,8 +326,8 @@ SENSORS: tuple[SharkSensorDescription, ...] = (
         translation_key="last_end_reason",
         entity_category=EntityCategory.DIAGNOSTIC,
         mqtt_only=True,
-        value_fn=lambda data: describe(_last_code(data, "DT_WFF_TERM_CODE")),
-        attrs_fn=lambda data: _code_attrs(data, "DT_WFF_TERM_CODE"),
+        value_fn=lambda data: describe(_job_outcome_code(data)),
+        attrs_fn=_job_outcome_attrs,
     ),
     SharkSensorDescription(
         key="last_dock_reason",

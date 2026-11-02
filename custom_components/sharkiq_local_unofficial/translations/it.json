@@ -46,7 +46,7 @@
         "name": "Giro di esplorazione"
       }
     },
-    "image": {
+    "camera": {
       "map": {
         "name": "Mappa"
       }
