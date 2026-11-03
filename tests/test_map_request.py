@@ -51,6 +51,16 @@ async def test_requested_map_fills_in_the_missed_job(hass, entry, robot):
     assert robot.map_requests == 0
 
 
+async def test_requested_map_rejects_placeholder_job_start(hass, entry, robot):
+    await setup(hass, entry)
+    requested = decode_frame(REQUESTED)
+    requested.job_started = 19
+
+    await push(hass, entry, docked_status(map=requested))
+
+    assert hass.states.get("sensor.basement_shark_last_clean_start").state == "unknown"
+
+
 async def test_requested_map_is_stored(hass, entry, robot, hass_storage):
     await setup(hass, entry)
     await push(hass, entry, docked_status(map=decode_frame(REQUESTED)))
