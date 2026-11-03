@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-11-02
+
+### Changed
+- Pinned the integration to immutable `sharklocal` 0.3.0.dev16.
+
+### Fixed
+- Implausible saved-map job-start values are no longer displayed as dates near
+  the Unix epoch.
+- An incomplete saved-map response without a valid job timestamp no longer
+  replaces the richer report from the last completed cleaning job.
+
 ## [0.4.2] - 2026-11-02
 
 ### Added
